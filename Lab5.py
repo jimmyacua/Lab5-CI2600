@@ -3,10 +3,9 @@ import torch
 import torch.optim as optim
 import struct as st
 import os
-import random
-import math
 from PIL import Image
 import random
+
 
 def read_idx(archivo):
     data = open(archivo, 'rb')
@@ -51,25 +50,6 @@ def read_idx(archivo):
         # print("LABELS", tensor.view(labels))
 
         return tensor
-
-
-def save_images(images):
-    una = Image.new('L', (28, 28))
-    for i in range(0, 5):
-        una.putdata(list(images[i].view(-1)))  # el -1 convierte a una dimension
-        una.show()
-        una.save(str(i) + '.jpg')
-
-
-def filter_data(images, labels, singleLabel):
-    x = (labels == singleLabel)
-    y = x.nonzero()
-    nums = images[y]
-    image = Image.new('L', (28, 28))
-    image.putdata(list(nums[random.randint(0, nums.size()[0])].view(-1)))
-    # image.show()
-    image.save(os.path.join('./filter_data/' + str(singleLabel) + '.jpg'))
-    return nums
 
 
 class Generator(nn.Module):
@@ -130,29 +110,8 @@ class Discriminator(nn.Module):
         return x
 
 
-def loss_fn(y, oov):
-    dif = ((oov-y)**2).mean()
-    return dif
-
-
-'''def training_opt(n, model, images, labels, optimizer):
-    labels = labels.long()
-    loss_fn = nn.CrossEntropyLoss()
-    images = images.float().view(-1, 784)
-    for i in range(0, n):
-        t_p = model(images)
-        loss = loss_fn(t_p, labels)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        print('Epoch %d, Loss %f' % (i, float(loss)))
-
-    torch.save(model.state_dict(), './save/nn')'''
-
-
-def train_discriminator(model, real, fake):
-    optimizer = optim.Adam(model.parameters(), lr=0.0002)
-    loss_fn = nn.BCELoss()
+def train_discriminator(discriminador, optimizer, real, fake):
+    '''loss_fn = nn.BCELoss()
     real = real.float()
     fake = fake.float()
     real = (real - real.mean())/255
@@ -163,25 +122,49 @@ def train_discriminator(model, real, fake):
         n2 = random.randrange(n1)
         miniBatch = real[n2:n1]
         miniBatch = miniBatch.view(-1, 784)
-        output = model(miniBatch)
+        output = discriminador(miniBatch)
         y = torch.ones(output.shape)
     else:
         n1 = random.randrange(fake.size()[0])
         n2 = random.randrange(n1)
         miniBatch = fake[n2:n1]
         miniBatch = miniBatch.view(-1, 784)
-        output = model(miniBatch)
+        output = discriminador(miniBatch)
         y = torch.zeros(output.shape)
     loss = loss_fn(output, y)
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+    print("end of train_discriminator") '''
 
-
-def train_generator(generador, discriminador, fake):
-    fake = fake.float().view(-1, 784)
-    optimizer = optim.Adam(generador.parameters(), lr=0.0002)
+    real = real.float()
+    fake = fake.float()
     loss_fn = nn.BCELoss()
+    N = real.size()[0]
+    optimizer.zero_grad()
+
+    # real data
+    target = torch.ones(N)
+    target = target.unsqueeze(1)
+    prediction_real = discriminador(real)
+    error_real = loss_fn(prediction_real, target)
+    error_real.backward()
+
+    # fake data
+    prediction_fake = discriminador(fake)
+    M = fake.size()[0]
+    target_fake = torch.zeros(M)
+    target_fake = target_fake.unsqueeze(1)
+    error_fake = loss_fn(prediction_fake, target_fake)
+    error_fake.backward()
+
+    optimizer.step()
+
+    return error_real + error_fake, prediction_real, prediction_fake
+
+
+def train_generator(discriminador, optimizer, fake):
+    '''loss_fn = nn.BCELoss()
     optimizer.zero_grad()
     prediction = discriminador(fake)
     y = torch.ones(prediction.shape)
@@ -190,17 +173,82 @@ def train_generator(generador, discriminador, fake):
     optimizer.step()
     print(loss)
     return loss
+    '''
+    loss_fn = nn.BCELoss()
+    N = fake.size(0)
+    optimizer.zero_grad()
+    prediction = discriminador(fake)
+    target = torch.ones(N)
+    target = target.unsqueeze(1)
+    error = loss_fn(prediction, target)
+    error.backward()
+    optimizer.step()
+
+    return error
 
 
 if __name__ == '__main__':
-    imagesTraining = read_idx('train-images.idx3-ubyte')
+    reales = read_idx('train-images.idx3-ubyte')
     labelsTraining = read_idx('train-labels.idx1-ubyte')
+    fakes = torch.randn(reales.shape).detach()
+
+    data_loader = torch.utils.data.DataLoader(reales, batch_size=100, shuffle=True)
+    # Num batches
+    num_batches = len(data_loader)
+
     generador = Generator()
     discriminator = Discriminator()
+
+    optimizerD = optim.Adam(discriminator.parameters(), lr=0.0002)
+    optimizerG = optim.Adam(generador.parameters(), lr=0.0002)
+
+    real = reales.float()
+    fake = fakes.float()
+    real = (real - real.mean()) / 255
+    fake = (fake - fake.mean()) / 255
+
     epochs = 200
-    #for n in range(0, epochs):
+    for i in range(0, epochs):
+        for n_batch, (real_batch) in enumerate(data_loader):
+            # train discriminador
+            real_data = real_batch.view(-1, 784)
+            fake_data = generador(torch.randn(real_data.size(0), 100)).detach()
+            error, predReal, predFake = train_discriminator(discriminator, optimizerD, real_data, fake_data)
+            # print("real: ", real_data.size(), ", fake: ", fake_data.size())
 
+            # train generator
+            # fake_data = generador(torch.randn(real_data.size(0), 100)).detach()
+            errorGen = train_generator(discriminator, optimizerG, fake_data)
 
-    fakes = torch.randn(imagesTraining.shape)
-    train_discriminator(discriminator, imagesTraining, fakes)
-    train_generator(generador, discriminator, fakes)
+            test_noise = torch.randn(16, 100)
+            if (n_batch) % 100 == 0:
+                test_images = generador(test_noise).data
+                # print("1 test images: ", test_images.size())
+                # test_images = test_images.view(test_images.size(0), 1, 28, 28)
+                # print("2 test images: ", test_images.size())
+                imagen = Image.new('L', (28, 28))
+                imagen.putdata(list(test_images))
+                imagen.save(os.path.join('./generadas/' + str(n_batch) + '.jpg'))
+            # imagen.show()
+            print("Error Dis: ", error.float(), ", error gen: ", errorGen.float())
+            print("Epoch: ", i)
+
+    # print(n_batch)
+    '''n1 = random.randrange(real.size()[0])
+    n2 = random.randrange(n1)
+    miniBatchReales = real[n2:n1]
+    miniBatchReales = miniBatchReales.view(-1, 784)
+    n1 = random.randrange(fake.size()[0])
+    n2 = random.randrange(n1)
+    miniBatchFakes = fake[n2:n1]
+    miniBatchFakes = miniBatchFakes.view(-1, 784)
+    error, predReal, predFake = train_discriminator(discriminator, optimizerD, miniBatchReales, miniBatchFakes)
+
+    g_error = train_generator(discriminator, optimizerG, miniBatchFakes)
+
+    test_noise = torch.randn(16, 100)
+    testImages = vectors_to_images(generador(test_noise)).data.cpu()
+    imagen = Image.new('L', (28, 28))
+    imagen.putdata(list(generador(test_noise)[0].view(-1)))
+    # imagen.show()
+    imagen.save(os.path.join('./generadas/' + str(i) + "_" + str(j) + '.jpg'))'''
